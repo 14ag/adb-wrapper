@@ -2,7 +2,7 @@
 
 ## Overview
 
-The ADB Wrapper System is a batch script-based automation tool that simplifies Android application deployment workflows. The system intelligently handles device selection, package format detection (APK vs AAB), device configuration detection, and automated bundletool integration for Android App Bundle installations.
+The ADB Wrapper System is a batch script-based automation tool that simplifies Android application deployment workflows. The system intelligently handles device selection, package format detection (APK vs APKS), and automated bundletool integration for APKS file installations.
 
 The design follows a modular subroutine architecture where each major capability is encapsulated in a labeled section that can be called via `call :label_name`. This approach maintains consistency with the existing codebase patterns observed in `selector.bat` and `adb2.bat`.
 
@@ -10,7 +10,7 @@ The design follows a modular subroutine architecture where each major capability
 
 1. **Single Entry Point**: One main script (`adb-wrapper.bat`) serves as the orchestrator
 2. **Subroutine Modularity**: Each functional component is implemented as a callable label
-3. **State Management**: Device ID, DPI, and language are stored in environment variables for cross-subroutine access
+3. **State Management**: Device ID is stored in environment variables for cross-subroutine access
 4. **Error-First Design**: All operations check for errors before proceeding
 5. **User Experience**: Clear console output with blank lines for readability
 
@@ -32,12 +32,11 @@ graph TD
     H -->|other| J[Direct ADB Pass-through]
     I --> K{Package Type}
     K -->|.apk| L[APK Installer]
-    K -->|.aab| M[AAB Installer]
+    K -->|.apks| M[APKS Installer]
     K -->|invalid| N[Error: Invalid Format]
-    M --> O[Locale Manager]
-    O --> P[Bundletool Executor]
-    L --> Q[Success Message]
-    P --> Q
+    L --> O[Success Message]
+    M --> P[Bundletool Executor]
+    P --> O
 ```
 
 ### Script Structure
@@ -48,10 +47,9 @@ The main script will be organized into the following sections:
 2. **Main Entry** - Command-line argument parsing and routing
 3. **Device Selector** - Device enumeration and selection logic
 4. **Install Handler** - Package type detection and routing
-5. **Locale Manager** - DPI and language detection
-6. **APK Installer** - Standard ADB install execution
-7. **AAB Installer** - Bundletool integration and execution
-8. **Utility Subroutines** - Helper functions (error display, choice reset, etc.)
+5. **APK Installer** - Standard ADB install execution
+6. **APKS Installer** - Bundletool integration and execution
+7. **Utility Subroutines** - Helper functions (error display, choice reset, etc.)
 
 ## Components and Interfaces
 
@@ -158,7 +156,7 @@ exit /b 0
 
 **Interface**:
 - Input: `%1` - Package file path
-- Output: Routes to APK or AAB installer
+- Output: Routes to APK or APKS installer
 - Return Code: 0 on success, 1 on error
 
 **Implementation**:
@@ -184,15 +182,15 @@ if /i "%ext%"==".apk" (
     exit /b %errorlevel%
 )
 
-if /i "%ext%"==".aab" (
-    call :install_aab "%package%"
+if /i "%ext%"==".apks" (
+    call :install_apks "%package%"
     exit /b %errorlevel%
 )
 
 :: Invalid extension
 echo.
 echo ERROR: Invalid package format: %ext%
-echo Supported formats: .apk, .aab
+echo Supported formats: .apk, .apks
 echo.
 exit /b 1
 ```
@@ -202,65 +200,7 @@ exit /b 1
 - Case-insensitive comparison with `/i` flag
 - Validates file existence before processing
 
-### 4. Locale Manager Component
-
-**Purpose**: Query device for DPI and language configuration
-
-**Interface**:
-- Input: Uses `%selected_device%` from environment
-- Output: Sets `%device_dpi%` and `%device_language%` variables
-- Return Code: 0 on success, 1 on error
-
-**Implementation**:
-
-```batch
-:locale_manager
-echo.
-echo Detecting device configuration...
-
-:: Query DPI
-for /f "tokens=*" %%a in ('adb -s %selected_device% shell getprop ro.sf.lcd_density 2^>nul') do (
-    set "device_dpi=%%a"
-)
-
-:: Validate DPI
-if "%device_dpi%"=="" (
-    echo ERROR: Failed to detect device DPI
-    exit /b 1
-)
-
-:: Query language
-for /f "tokens=*" %%b in ('adb -s %selected_device% shell getprop persist.sys.language 2^>nul') do (
-    set "device_language=%%b"
-)
-
-:: Fallback to ro.product.locale if persist.sys.language is empty
-if "%device_language%"=="" (
-    for /f "tokens=1 delims=-" %%c in ('adb -s %selected_device% shell getprop ro.product.locale 2^>nul') do (
-        set "device_language=%%c"
-    )
-)
-
-:: Validate language
-if "%device_language%"=="" (
-    echo ERROR: Failed to detect device language
-    exit /b 1
-)
-
-echo Device DPI: %device_dpi%
-echo Device Language: %device_language%
-echo.
-
-exit /b 0
-```
-
-**Key Design Decisions**:
-- Uses `getprop` to query device properties
-- Implements fallback mechanism for language detection
-- Redirects stderr to nul to suppress error messages
-- Validates both values before returning
-
-### 5. APK Installer Component
+### 4. APK Installer Component
 
 **Purpose**: Install APK files using standard ADB install command
 
@@ -300,82 +240,52 @@ exit /b 0
 - Checks errorlevel for installation failure
 - Includes device ID in error messages for clarity
 
-### 6. AAB Installer Component
+### 5. APKS Installer Component
 
-**Purpose**: Convert AAB to APK set using bundletool and install to device
+**Purpose**: Install APKS files using bundletool
 
 **Interface**:
-- Input: `%1` - AAB file path
-- Output: Console output from bundletool and installation
+- Input: `%1` - APKS file path
+- Output: Console output from bundletool installation
 - Return Code: 0 on success, 1 on error
 
 **Implementation**:
 
 ```batch
-:install_aab
-set "aab_file=%~1"
-
-:: Detect device configuration
-call :locale_manager
-if errorlevel 1 exit /b 1
-
-:: Build language list
-set "languages=en"
-if /i not "%device_language%"=="en" (
-    set "languages=en,%device_language%"
-)
+:install_apks
+set "apks_file=%~1"
 
 echo.
-echo Installing AAB to device %selected_device%...
-echo Configuration: DPI=%device_dpi%, Languages=%languages%
+echo Installing APKS to device %selected_device%...
 echo.
 
-:: Execute bundletool
-java -jar bundletool-all-1.18.3_2.jar build-apks ^
-    --bundle="%aab_file%" ^
-    --output=temp_apks.apks ^
-    --mode=default ^
-    --device-id=%selected_device% ^
-    --aapt2=aapt2.exe
-
-if errorlevel 1 (
-    echo.
-    echo ERROR: Bundletool APK generation failed
-    echo.
-    exit /b 1
-)
-
-:: Install generated APK set
+:: Install using bundletool
 java -jar bundletool-all-1.18.3_2.jar install-apks ^
-    --apks=temp_apks.apks ^
+    --apks="%apks_file%" ^
     --device-id=%selected_device%
 
 if errorlevel 1 (
     echo.
-    echo ERROR: AAB installation failed on device %selected_device%
+    echo ERROR: APKS installation failed on device %selected_device%
     echo.
-    del temp_apks.apks 2>nul
     exit /b 1
 )
 
-:: Cleanup
-del temp_apks.apks 2>nul
-
 echo.
-echo SUCCESS: AAB installed successfully on device %selected_device%
+echo SUCCESS: APKS installed successfully on device %selected_device%
 echo.
 
 exit /b 0
 ```
 
 **Key Design Decisions**:
-- Calls locale_manager to get device configuration
-- Builds language list with English always included
-- Uses temporary file for APK set (cleaned up after installation)
-- Passes device ID directly to bundletool for optimized APK generation
-- Uses line continuation (`^`) for readability of long commands
+- Uses bundletool's `install-apks` command directly
+- No need for build-apks step (APKS already contains APK set)
+- No locale detection needed (bundletool handles device matching automatically)
+- Simpler than AAB installation (fewer steps, no temporary files)
+- Passes device ID to ensure installation to correct device
 
-### 7. Utility Subroutines
+### 6. Utility Subroutines
 
 **Purpose**: Provide helper functions used across components
 
@@ -398,7 +308,7 @@ echo   adb-wrapper.bat ^<adb-command^> [arguments]
 echo.
 echo Examples:
 echo   adb-wrapper.bat install myapp.apk
-echo   adb-wrapper.bat install myapp.aab
+echo   adb-wrapper.bat install myapp.apks
 echo   adb-wrapper.bat shell pm list packages
 echo   adb-wrapper.bat logcat
 echo.
@@ -422,8 +332,6 @@ The system uses environment variables for state management across subroutines:
 | Variable | Type | Scope | Description |
 |----------|------|-------|-------------|
 | `selected_device` | String | Global | ADB device ID of selected device |
-| `device_dpi` | Integer | Global | Screen density of selected device |
-| `device_language` | String | Global | Primary language code (e.g., "en", "es") |
 | `package_file` | String | Local | Path to package file being installed |
 | `command` | String | Local | Command passed to wrapper |
 | `device_count` | Integer | Local | Number of connected devices |
@@ -434,9 +342,7 @@ The system uses environment variables for state management across subroutines:
 
 | File | Purpose | Required |
 |------|---------|----------|
-| `bundletool-all-1.18.3_2.jar` | AAB to APK conversion | Yes (for AAB) |
-| `aapt2.exe` | Android Asset Packaging Tool | Optional |
-| `temp_apks.apks` | Temporary APK set file | Generated/Deleted |
+| `bundletool-all-1.18.3_2.jar` | APKS installation | Yes (for APKS) |
 
 ## Error Handling
 
@@ -453,28 +359,21 @@ The system uses environment variables for state management across subroutines:
    - Message: "ERROR: Package file not found: {path}"
 
 3. **Invalid Package Format**
-   - Detection: Extension not `.apk` or `.aab`
+   - Detection: Extension not `.apk` or `.apks`
    - Response: Display error with supported formats and exit with code 1
    - Message: "ERROR: Invalid package format: {ext}"
 
-4. **Device Configuration Detection Failure**
-   - Detection: Empty DPI or language after query
-   - Response: Display specific error and exit with code 1
-   - Messages: 
-     - "ERROR: Failed to detect device DPI"
-     - "ERROR: Failed to detect device language"
-
-5. **Bundletool Execution Failure**
+4. **Bundletool Execution Failure**
    - Detection: `errorlevel 1` after bundletool command
    - Response: Display bundletool error output and exit with code 1
-   - Message: "ERROR: Bundletool APK generation failed"
+   - Message: "ERROR: APKS installation failed on device {device_id}"
 
-6. **Installation Failure**
+5. **Installation Failure**
    - Detection: `errorlevel 1` after install command
    - Response: Display error with device ID and exit with code 1
    - Messages:
      - "ERROR: APK installation failed on device {device_id}"
-     - "ERROR: AAB installation failed on device {device_id}"
+     - "ERROR: APKS installation failed on device {device_id}"
 
 ### Error Handling Pattern
 
@@ -535,7 +434,7 @@ Since batch scripts don't have traditional unit testing frameworks, testing will
 | Scenario | Input | Expected Result |
 |----------|-------|-----------------|
 | Valid APK | `test.apk` | Routes to APK installer |
-| Valid AAB | `test.aab` | Routes to AAB installer |
+| Valid APKS | `test.apks` | Routes to APKS installer |
 | Invalid extension | `test.zip` | Error message |
 | Missing file | `nonexistent.apk` | File not found error |
 | Case insensitive | `TEST.APK` | Routes to APK installer |
@@ -554,9 +453,9 @@ Since batch scripts don't have traditional unit testing frameworks, testing will
 | Scenario | Package Type | Expected Result |
 |----------|--------------|-----------------|
 | Valid APK | APK file | Successful installation |
-| Valid AAB | AAB file | Bundletool conversion + install |
+| Valid APKS | APKS file | Bundletool installation |
 | Invalid APK | Corrupted APK | ADB error displayed |
-| Invalid AAB | Corrupted AAB | Bundletool error displayed |
+| Invalid APKS | Corrupted APKS | Bundletool error displayed |
 
 ### Integration Test Workflow
 
@@ -580,10 +479,10 @@ call adb-wrapper.bat install test.apk
 echo Expected: Successful installation
 echo.
 
-:: Test 3: AAB install
-echo Test 3: AAB install
-call adb-wrapper.bat install test.aab
-echo Expected: Bundletool conversion + installation
+:: Test 3: APKS install
+echo Test 3: APKS install
+call adb-wrapper.bat install test.apks
+echo Expected: Bundletool installation
 echo.
 
 :: Test 4: Invalid format
@@ -602,12 +501,8 @@ Before considering the implementation complete, verify:
 
 - [ ] Device selector handles 0, 1, and N devices correctly
 - [ ] APK files install successfully
-- [ ] AAB files convert and install successfully
-- [ ] DPI and language detection works on test devices
-- [ ] English is always included in language list
-- [ ] Non-English languages are added correctly
+- [ ] APKS files install successfully via bundletool
 - [ ] Error messages are clear and include relevant context
-- [ ] Temporary files are cleaned up after AAB installation
 - [ ] Script follows established batch coding conventions
 - [ ] All subroutines use proper `exit /b` returns
 - [ ] Console output uses blank lines for readability
@@ -629,34 +524,16 @@ Before considering the implementation complete, verify:
 
 ### Bundletool Integration Details
 
-The bundletool integration uses two commands:
+The bundletool integration uses the `install-apks` command:
 
-1. **build-apks**: Converts AAB to APK set
-   - `--bundle`: Input AAB file
-   - `--output`: Output APKS file
-   - `--mode=default`: Standard APK generation
-   - `--device-id`: Target device for optimization
-
-2. **install-apks**: Installs APK set to device
+**install-apks**: Installs APKS file to device
    - `--apks`: Input APKS file
    - `--device-id`: Target device
 
-### Language List Construction
-
-The language list follows this logic:
-
-```
-IF device_language == "en" THEN
-    languages = "en"
-ELSE
-    languages = "en," + device_language
-END IF
-```
-
-This ensures:
-- English is always included (Requirement 5.1)
-- Device language is added if different from English (Requirement 5.2)
-- No duplication when device is English (Requirement 5.3)
+bundletool automatically:
+- Detects device configuration (DPI, ABI, locale, SDK)
+- Extracts appropriate APKs from the APKS archive
+- Installs selected APKs using `adb install-multiple`
 
 ### File Path Handling
 
@@ -691,8 +568,8 @@ This ensures the script works correctly with:
 :: Install APK
 adb-wrapper.bat install myapp.apk
 
-:: Install AAB
-adb-wrapper.bat install myapp.aab
+:: Install APKS
+adb-wrapper.bat install myapp.apks
 
 :: Pass-through ADB commands
 adb-wrapper.bat shell pm list packages
@@ -730,8 +607,6 @@ This design provides a robust, maintainable solution for ADB operations that fol
 The system addresses all requirements:
 - ✅ Device detection and selection (Requirement 1)
 - ✅ Package type detection (Requirement 2)
-- ✅ Device configuration detection (Requirement 3)
-- ✅ Bundletool integration (Requirement 4)
-- ✅ Multi-locale support (Requirement 5)
-- ✅ Batch script implementation style (Requirement 6)
-- ✅ Error handling and user feedback (Requirement 7)
+- ✅ Bundletool integration (Requirement 3)
+- ✅ Batch script implementation style (Requirement 4)
+- ✅ Error handling and user feedback (Requirement 5)
