@@ -23,7 +23,7 @@
 ::     - It requires administrative permissions if used on protected folders.
 :: ==============================================================================
 ::---------------------------------------------------------------------------------------------------
-@REM @echo off
+@REM  @echo off
 
 ::====================================^^^^^====
 
@@ -42,6 +42,7 @@ set "BUNDLETOOL=C:\Program_Files\adb\bundletool-all-1.18.3_2.jar"
 :: functional variables
 set "loop=0"
 set "currentDirectory=%~dp0"
+set "currentDirectory=%currentDirectory:"=%"
 set "_path=%~1"
 set "empty_var="
 
@@ -63,6 +64,22 @@ if "%_path%"=="" (
 	goto :getFile
 ) 
 
+:: adb device
+call :adb_device_list
+if not defined adb_device_list (
+    call :error no adb device connected connect a device and enable usb debugging
+    endlocal
+    exit /b 0
+)
+echo !adb_device_list!| findstr "," >nul
+if not errorlevel 1 (
+    call :info more than one device is connected pick one below
+    call :selector !adb_device_list!
+    set "device_serial=!selector!"
+) else (
+    set "device_serial=!adb_device_list!"
+)
+
 goto :file_or_folder0
 
 
@@ -78,7 +95,7 @@ call :info Press Enter to process all files with the extensions "%extensions%" i
 set "_path="
 set /p "_path=::"
 if not defined _path (
-	set "_path=%currentDirectory:"=%"
+	set "_path=%currentDirectory%"
 ) else if defined _path (
 		set "_path=%_path:"=%"
 	)
@@ -89,10 +106,10 @@ set "workingDirectory="
 set "file="
 call :file_or_folder "%_path%"
 if "%file_or_folder%"=="folder" (
-	set "workingDirectory="%_path%""
+	set "workingDirectory=%_path%"
 	goto :directory_processing
 ) else if "%file_or_folder%"=="file" (
-	set "file="%_path%""
+	set "file=%_path%"
 	goto :fileProcessing
 ) else if "%file_or_folder%"=="" (
 	call :error "...%_path:~-10%" not found
@@ -122,10 +139,10 @@ if %found_files% equ 0 (
 	)
 
 cls
-for %%j in (%extensions%) do (
-	dir /b *%%j
-	)
 
+for %%j in (%extensions%) do (	
+	dir /b *%%j 2>nul
+)
 
 setlocal enabledelayedexpansion
 :: confirm install all files in the current directory
@@ -140,12 +157,15 @@ if %errorlevel% equ 2 (
 	set "ok_count=0"
 	set "all_count=0"
 	:: install each file in the current directory
-	for %%j in (%extensions%) do (
-		for /r "%workingDirectory%" %%i in (*%%j) do (
-		    call :subRoutine "%%~i"
-			set /a "all_count+=1"
-			if !errorlevel! equ 0 set /a "ok_count+=1"
-		)   )
+	for %%a in (%extensions%) do (
+		for /f "delims=" %%b in ('dir /b *%%a') do (
+		echo ="%%b"==
+			if not "%%b"=="" (
+				call :subRoutine "%%~fb"
+				set /a "all_count+=1"
+				if !errorlevel! equ 0 set /a "ok_count+=1"
+	)   )	) 2>nul
+	
 	:: show number of files installed successfully
 	call :info done. !ok_count!/!all_count! files processed.
 	endlocal
@@ -156,6 +176,13 @@ if %errorlevel% equ 2 (
 :fileProcessing
 call :check %file% "%extensions%"
 if "%check%"=="fail" goto :getFile
+:: step read the app name
+call :apk_name "%file%"
+if not defined apk_name (
+    call :error could not read the package name from "%_path%"
+    goto :end
+)
+echo installing %apk_name%	
 call :subRoutine %file%
 if errorlevel 0 (
 	call :info \\\\\\\ done ///////
@@ -172,6 +199,16 @@ set "x=%*"
 call :main %x%
 exit /b %errorlevel%
 
+
+
+:main
+set "program_full_path=%*"
+:: call :info Processing %program_full_path%...
+for %%i in ("%program_full_path:"=%") do (
+	set "ext=%%~xe"
+	echo Processing %program_full_path%
+	)
+exit /b 0
 
 
 :main
@@ -245,8 +282,8 @@ if /I "%~x1"==".apks" (
     set "_tmp_dir=%TEMP%\apkinstall_%RANDOM%"
     md "%_tmp_dir%" >nul 2>&1
     powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; $z=[System.IO.Compression.ZipFile]::OpenRead('%~1'); $e=$z.Entries | Where-Object { $_.FullName -eq 'splits/base-master.apk' }; if ($e) { [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e,'%_tmp_dir%\base.apk',$true) }; $z.Dispose()" >nul 2>&1
-    if exist "%_tmp_dir%\base.apk" (
-        set "_target=%_tmp_dir%\base.apk"
+    for /d %%d in (*base*.apk) do (
+        set "_target=%_tmp_dir%\%%d"
         set "_cleanup=%_tmp_dir%"
     	)
 	)
@@ -401,8 +438,10 @@ set "arg_string=%*"
 set "i=0"
 set "choicelist="
 :: Replace every comma with a quote, a space, and another quote (" ") and Wrap the entire resulting string in quotes
+if not defined arg_string goto:break
 set "arg_list="%arg_string:,=" "%""
 echo Processing arguments:
+
 rem Loop through the new quoted, space-separated list
 for %%a in (%arg_list%) do (
 	set /a i+=1
@@ -416,13 +455,19 @@ for %%a in (%arg_list%) do (
 	)   )
 
 call :reset_choice
-choice /c %choicelist% /n /m "pick option btn %choicelist:~0,1% and %choicelist:~-1,1% ::"
+if %i% gtr 1 (
+	choice /c %choicelist% /n /m "pick option btn %choicelist:~0,1% and %choicelist:~-1,1% ::"
+) else(
+	set "choicelist=1"
+)
 for /L %%c in (%choicelist:~-1%,-1,%choicelist:~0,1%) do (
-    if errorlevel %%c (
-    for %%d in (!_%%c!) do (
-            endlocal & set "selector=%%d"
-            goto :break
-    )   )   )
+	if errorlevel %%c (
+		for %%d in (!_%%c!) do (
+			endlocal & set "selector=%%d"
+			goto :break
+)   )   )   
+
+
 :break
 set "selector=%selector:"=%"
 exit /b 0
@@ -446,13 +491,13 @@ if exist "%filename%" (
 			call :truncate_str %%j %%~nxk
 			if /i not "%%j"=="!truncate_str!" (
 				call :error not a %%j file.
-				endlocal & set "check=fail" 
+				endlocal & set "check=fail" & exit /b 0
 				) else (
-					endlocal & set "check=pass"
+					endlocal & set "check=!truncate_str!" & exit /b 0
 				) 	)	)
 ) else if not exist "%filename%" (
 	call :error "%filename%" not found
-	endlocal & set "check=fail"
+	endlocal & set "check=fail" & exit /b 0
 )
 exit /b 0
 
