@@ -135,7 +135,6 @@ if "%is_apks%"=="1" (
     call :device_dpi
     call :device_locale
     call :info device screen density is %device_dpi% dpi locale is %device_locale%
-    call :info bundletool will match the correct density abi and locale splits
 )
 
 :: step 4 ask the user to confirm with the selector function before installing
