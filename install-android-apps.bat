@@ -23,9 +23,8 @@
 ::     - It requires administrative permissions if used on protected folders.
 :: ==============================================================================
 ::---------------------------------------------------------------------------------------------------
-  @echo off
-
-::====================================^^^^^====
+@echo off
+::============here we go========================^^^^^====
 
 
 :: user variables
@@ -41,9 +40,10 @@ set "BUNDLETOOL=C:\Program_Files\adb\bundletool-all-1.18.3_2.jar"
 
 :: functional variables
 set "loop=0"
-set "currentDirectory=%~dp0"
-set "currentDirectory=%currentDirectory:"=%"
-set "_path=%~1"
+set "currentDirectory=%cd%"
+cd /d %currentDirectory%
+set "_path=%*"
+exit /b
 set "empty_var="
 
 
@@ -54,7 +54,7 @@ if not defined ADB (
 )
 
 :getVars
-
+cls
 setlocal enabledelayedexpansion
 set "adb_device_list="
 set "device_count=0"
@@ -111,7 +111,7 @@ cd "%_path%"
 call :file_or_folder "%_path%"
 if "%file_or_folder%"=="folder" (
 	call :info "%_path%" in use
-	rem cls
+	cls
 	
 	:: check for compatible files
 	set "found_files=0"
@@ -121,11 +121,11 @@ if "%file_or_folder%"=="folder" (
 
 	if !found_files! equ 0 (
 		call :error No compatible files found in "...%_path:~-10%"
-		rem cls
+		cls
 		goto :getVars
 	)
 
-	rem cls
+	cls
 
 	for %%j in (%extensions%) do (	
 		dir /b *%%j 2>nul
@@ -136,11 +136,11 @@ if "%file_or_folder%"=="folder" (
 	call :reset_choice
 	CHOICE /C yn /N /M "\\\\\\\\ continue? [Y]es, [N]o ///////////"
 	if errorlevel 2 (
-		rem cls
+		cls
 		goto :getVars
 	) else if errorlevel 1 (
 		
-		rem cls
+		cls
 		set "ok_count=0"
 		set "all_count=0"
 		:: install each file in the current directory
@@ -193,14 +193,13 @@ if /I "%ext%"==".apks" (
 			md "%_tmp_dir%" >nul 2>&1
 			copy "%_target%" "%_tmp_dir%\bundle.zip" >nul 2>&1
 			powershell -Command "Expand-Archive -LiteralPath '%_tmp_dir%\bundle.zip' -DestinationPath '%_tmp_dir%' -Force" >nul 2>&1
-			echo ----------------------------------------------------------------------------------------------------------------------------------
 			for /f "delims=" %%b in ('dir /b /s "%_tmp_dir%\*base*" 2^>nul') do (
 				set "_base_target=%%b"
 				set "_cleanup=%_tmp_dir%"
 			)
 
 			call :package_name "!_base_target!"
-			if defined _cleanup rd /s /q "%_cleanup%" >nul 2>&1
+			if exist %_cleanup% rd /s /q "%_cleanup%" >nul 2>&1
 			call :info installing for !package_name!
 			"%JAVA%" -jar "%BUNDLETOOL%" install-apks --apks="%_target%" --device-id="%device_serial%" --device-spec="%temp%\%device_serial%.json"
 		) else call :error BUNDLETOOL path is not set edit this script and fill in the BUNDLETOOL variable   
@@ -211,7 +210,6 @@ if /I "%ext%"==".apk" (
 		echo installing !package_name!
 		"%ADB%" -s "%device_serial%" install -r "%_target%"
 	)
-echo -%ext%-------------------------------------------ext--
 exit /b 0
 
 
@@ -286,7 +284,6 @@ for /L %%a in (1,1,10) do (
             for /f "tokens=1 skip=0" %%c in ("!filename:~%%b!") do (
                 endlocal & set "truncate_str=%%c"
 )   )   )   ) >nul 2>&1
-echo %truncate_str% ============================================================================================================================
 
 exit /b 0
 
@@ -431,7 +428,7 @@ exit /b 0
 :: loops if drag and drop is not happening
 if "%loop%"=="1" (
     pause
-    rem cls
+    cls
     goto getVars
 ) else (
     endlocal & exit /b %errorlevel%
