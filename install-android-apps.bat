@@ -43,7 +43,6 @@ set "loop=0"
 set "currentDirectory=%cd%"
 cd /d %currentDirectory%
 set "_path=%*"
-exit /b
 set "empty_var="
 
 
