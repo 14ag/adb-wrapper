@@ -41,7 +41,7 @@ set "BUNDLETOOL=C:\Program_Files\adb\bundletool-all-1.18.3_2.jar"
 :: functional variables
 set "loop=0"
 set "currentDirectory=%cd%"
-cd /d %currentDirectory%
+cd /d "%currentDirectory%"
 set "_path=%*"
 set "empty_var="
 
@@ -105,10 +105,9 @@ if "%_path:~-1%"=="\" (
 	set "_path=%_path:~0,-1%"
 )
 
-cd "%_path%"
-
 call :file_or_folder "%_path%"
 if "%file_or_folder%"=="folder" (
+	cd "%_path%"
 	call :info "%_path%" in use
 	cls
 	
@@ -173,6 +172,7 @@ goto :end
 
 
 :subRoutine
+setlocal enabledelayedexpansion
 set "_target=%~1"
 set "package_name="
 set "_base_target="
@@ -184,24 +184,120 @@ for %%i in ("%_target%") do (
 )
 
 if /I "%ext%"==".apks" (
-	if  defined JAVA (
+	if defined JAVA (
 		if defined BUNDLETOOL (
-			if not exist "%temp%\%device_serial%.json" (
-				"%JAVA%" -jar "%BUNDLETOOL%"  get-device-spec --device-id="%device_serial%" --output="%temp%\%device_serial%.json"
+			:: sanitize serial for use as a Windows filename (TCP serials contain ':')
+			set "_serial_safe=!device_serial::=_!"
+			set "_spec_path=!temp!\!_serial_safe!.json"
+			if not exist "!_spec_path!" (
+				"%JAVA%" -jar "%BUNDLETOOL%" get-device-spec --device-id="!device_serial!" --output="!_spec_path!"
 			)
 			md "%_tmp_dir%" >nul 2>&1
 			copy "%_target%" "%_tmp_dir%\bundle.zip" >nul 2>&1
 			powershell -Command "Expand-Archive -LiteralPath '%_tmp_dir%\bundle.zip' -DestinationPath '%_tmp_dir%' -Force" >nul 2>&1
-			for /f "delims=" %%b in ('dir /b /s "%_tmp_dir%\*base*" 2^>nul') do (
-				set "_base_target=%%b"
-				set "_cleanup=%_tmp_dir%"
-			)
 
-			call :package_name "!_base_target!"
-			if exist %_cleanup% rd /s /q "%_cleanup%" >nul 2>&1
-			call :info installing for !package_name!
-			"%JAVA%" -jar "%BUNDLETOOL%" install-apks --apks="%_target%" --device-id="%device_serial%" --device-spec="%temp%\%device_serial%.json"
-		) else call :error BUNDLETOOL path is not set edit this script and fill in the BUNDLETOOL variable   
+			:: check format: bundletool archives contain toc.pb, SAI archives do not
+			if exist "%_tmp_dir%\toc.pb" (
+				:: bundletool format - use bundletool install-apks with device spec
+				for /f "delims=" %%b in ('dir /b /s "%_tmp_dir%\*base*" 2^>nul') do (
+					set "_base_target=%%b"
+				)
+				call :package_name "!_base_target!"
+				rd /s /q "%_tmp_dir%" >nul 2>&1
+				call :info installing for !package_name!
+				"%JAVA%" -jar "%BUNDLETOOL%" install-apks --apks="!_target!" --device-id="!device_serial!" --device-spec="!_spec_path!"
+			) else (
+				:: SAI format - select APKs by device spec then use adb install-multiple
+				for /f "delims=" %%b in ('dir /b /s "%_tmp_dir%\*base*" 2^>nul') do (
+					set "_base_target=%%b"
+				)
+				call :package_name "!_base_target!"
+				call :info installing for !package_name! ^(SAI format^)
+
+				:: parse device spec JSON for supported ABIs, density, and language
+				set "_abi="
+				set "_dpi="
+				set "_lang="
+				for /f "usebackq tokens=*" %%L in ("!_spec_path!") do (
+					set "_line=%%L"
+					:: extract first ABI
+					if not defined _abi (
+						echo "!_line!" | findstr /i "supportedAbis" >nul && (
+							for /f "tokens=2 delims=:" %%V in ("!_line!") do set "_abi_raw=%%V"
+						)
+					)
+					:: extract screen density
+					if not defined _dpi (
+						echo "!_line!" | findstr /i "screenDensity" >nul && (
+							for /f "tokens=2 delims=:" %%V in ("!_line!") do (
+								set "_dpi_raw=%%V"
+								set "_dpi_raw=!_dpi_raw: =!"
+								set "_dpi_raw=!_dpi_raw:,=!"
+								for /f "tokens=1 delims= " %%D in ("!_dpi_raw!") do set "_dpi=%%D"
+							)
+						)
+					)
+					:: extract first locale language
+					if not defined _lang (
+						echo "!_line!" | findstr /i "supportedLocales" >nul && (
+							for /f "tokens=2 delims=:" %%V in ("!_line!") do set "_lang_raw=%%V"
+						)
+					)
+				)
+				:: extract first ABI from array (e.g. "arm64-v8a" -> arm64_v8a config name)
+				if defined _abi_raw (
+					set "_abi_raw=!_abi_raw:[=!"
+					set "_abi_raw=!_abi_raw:]=!"
+					for /f "tokens=1 delims=," %%A in ("!_abi_raw!") do set "_abi=%%A"
+					set "_abi=!_abi:"=!"
+					set "_abi=!_abi: =!"
+					set "_abi=!_abi:-=_!"
+				)
+				:: extract first lang from array
+				if defined _lang_raw (
+					set "_lang_raw=!_lang_raw:[=!"
+					set "_lang_raw=!_lang_raw:]=!"
+					for /f "tokens=1 delims=," %%A in ("!_lang_raw!") do set "_lang=%%A"
+					set "_lang=!_lang:"=!"
+					set "_lang=!_lang: =!"
+					:: keep only language part (e.g. en-US -> en)
+					for /f "tokens=1 delims=-" %%A in ("!_lang!") do set "_lang=%%A"
+				)
+
+				:: build adb install-multiple command with matching APKs
+				:: always include base.apk, add matching config splits
+				set "_apk_list="
+				for /f "delims=" %%F in ('dir /b "%_tmp_dir%\*.apk" 2^>nul') do (
+					set "_fname=%%~nF"
+					:: always include base
+					if /i "%%~nF"=="base" (
+						set "_apk_list=!_apk_list! "%_tmp_dir%\%%F""
+					) else (
+						:: include matching ABI config
+						if defined _abi (
+							if /i "!_fname!"=="config.!_abi!" set "_apk_list=!_apk_list! "%_tmp_dir%\%%F""
+						)
+						:: include matching density config - map dpi number to bucket name
+						if defined _dpi (
+							set "_dpi_n=!_dpi!"
+							if !_dpi_n! leq 120 if /i "!_fname!"=="config.ldpi"    set "_apk_list=!_apk_list! "%_tmp_dir%\%%F""
+							if !_dpi_n! leq 160 if !_dpi_n! gtr 120 if /i "!_fname!"=="config.mdpi"    set "_apk_list=!_apk_list! "%_tmp_dir%\%%F""
+							if !_dpi_n! leq 213 if !_dpi_n! gtr 160 if /i "!_fname!"=="config.tvdpi"   set "_apk_list=!_apk_list! "%_tmp_dir%\%%F""
+							if !_dpi_n! leq 240 if !_dpi_n! gtr 213 if /i "!_fname!"=="config.hdpi"    set "_apk_list=!_apk_list! "%_tmp_dir%\%%F""
+							if !_dpi_n! leq 320 if !_dpi_n! gtr 240 if /i "!_fname!"=="config.xhdpi"   set "_apk_list=!_apk_list! "%_tmp_dir%\%%F""
+							if !_dpi_n! leq 480 if !_dpi_n! gtr 320 if /i "!_fname!"=="config.xxhdpi"  set "_apk_list=!_apk_list! "%_tmp_dir%\%%F""
+							if !_dpi_n! gtr 480               if /i "!_fname!"=="config.xxxhdpi" set "_apk_list=!_apk_list! "%_tmp_dir%\%%F""
+						)
+						:: include matching language config
+						if defined _lang (
+							if /i "!_fname!"=="config.!_lang!" set "_apk_list=!_apk_list! "%_tmp_dir%\%%F""
+						)
+					)
+				)
+				"%ADB%" -s "!device_serial!" install-multiple -r !_apk_list!
+				rd /s /q "%_tmp_dir%" >nul 2>&1
+			)
+		) else call :error BUNDLETOOL path is not set edit this script and fill in the BUNDLETOOL variable
     ) else call :error JAVA path is not set edit this script and fill in the JAVA variable
 ) 
 if /I "%ext%"==".apk" (
@@ -394,7 +490,6 @@ exit /b 0
 
 
 :check
-:: uses truncate_str, error
 :: tests to find out if filename [%1] has any of these extensions [%2]
 :: call :check "filename" "extensions"
 set "check="
@@ -405,17 +500,18 @@ set "extensions=%extensions:"=%"
 setlocal enabledelayedexpansion
 :: verify file existence & validate its type
 if exist "%filename%" (
-	::this loops thru each extension
+	:: use %%~xk to get the file extension directly - no truncate_str needed
 	for %%k in ("%filename%") do (
 		for %%j in (%extensions%) do (
-			call :truncate_str "%%j" "%%~nxk"
-			if /i not "%%j"=="!truncate_str!" (
-				call :error not a %%j file.
-				endlocal & set "check=fail" & exit /b 0
-				) else (
-					endlocal & set "check=!truncate_str!" & exit /b 0
-) 	)	)
-) else if not exist "%filename%" (
+			if /i "%%j"=="%%~xk" (
+				endlocal & set "check=%%~xk" & exit /b 0
+			)
+		)
+	)
+	:: no extension matched
+	call :error file extension not supported.
+	endlocal & set "check=fail" & exit /b 0
+) else (
 	call :error "%filename%" not found
 	endlocal & set "check=fail" & exit /b 0
 )
