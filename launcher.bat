@@ -1,6 +1,6 @@
 ::[Bat To Exe Converter]
 ::
-::fBE1pAF6MU+EWHreyHcjLQlHcBSKNWezFokP6f346taGpk9QQ/A+aJ/eyIiHLvMH60noOJcj0mhVkc9BDQtIbVypbxtU
+::fBE1pAF6MU+EWHreyHcjLQlHcBSKNWezFokP6f346taGpk9QQ/A+aJ/eyIidI/Ia+lH3SZ8jxW5blMdBDRVcbB2iakI1uX5R+GaEI6c=
 ::YAwzoRdxOk+EWAjk
 ::fBw5plQjdCuDJFqR51Y/JQhoRQeNMniGB7sY+ufy66ePp0wZa+QzeZuV07eBQA==
 ::YAwzuBVtJxjWCl3EqQJgSA==
@@ -32,6 +32,7 @@
 ::
 ::
 ::978f952a14a936cc963da21a135fa983
+@echo off
 :args
 set "a=%*"
 set "a0=%~0"
@@ -45,7 +46,9 @@ if defined a1 (
 
 if defined args (
     set "args=%args:"=%"
-    cmd /k "install-android-apps.bat %args%"
-) 
+    cmd /c "install-android-apps.bat %args%"
+) else (
+    cmd /c "install-android-apps.bat"
+)
 
 exit /b

@@ -83,7 +83,7 @@ if %device_count% gtr 0 (
 	)
 		
 ) else (
-	call :error no adb device connected connect a device and enable usb debugging
+	call :error no adb device connected. connect a device and enable usb debugging
 	goto :end
 )
 
